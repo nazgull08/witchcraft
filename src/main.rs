@@ -6,9 +6,7 @@ use indexer::pangea::initialize_pangea_indexer;
 use storage::matching_orders::MatchingOrders;
 use std::sync::Arc;
 use storage::order_book::OrderBook;
-use tokio::net::TcpListener;
 use tokio::signal;
-use tokio_tungstenite::accept_async;
 use web::server::rocket;
 
 pub mod config;
@@ -51,25 +49,4 @@ async fn main() -> Result<(), Error> {
 async fn run_rocket_server(port: u16, order_book: Arc<OrderBook>) {
     let rocket = rocket(port, order_book);
     let _ = rocket.launch().await;
-}
-
-async fn run_matcher_websocket_server(
-    matcher_websocket: Arc<MatcherWebSocket>,
-    matcher_ws_port: u16,
-) {
-    let matcher_ws_str = format!("0.0.0.0:{}", matcher_ws_port);
-    let listener = TcpListener::bind(matcher_ws_str)
-        .await
-        .expect("Can't bind WebSocket port");
-
-    while let Ok((stream, _)) = listener.accept().await {
-        let matcher_websocket_clone = matcher_websocket.clone();
-
-        tokio::spawn(async move {
-            let ws_stream = accept_async(stream)
-                .await
-                .expect("Error during WebSocket handshake");
-            matcher_websocket_clone.handle_connection(ws_stream).await;
-        });
-    }
 }
