@@ -3,7 +3,7 @@ use error::Error;
 use futures_util::future::FutureExt;
 use futures_util::future::{join_all, select};
 use indexer::pangea::initialize_pangea_indexer;
-use storage::matching_orders::MatchingOrders;
+use storage::candles::CandleStore;
 use std::sync::Arc;
 use storage::order_book::OrderBook;
 use tokio::signal;
@@ -21,13 +21,15 @@ async fn main() -> Result<(), Error> {
     env_logger::init();
 
     let order_book = Arc::new(OrderBook::new());
-    let matching_orders = Arc::new(MatchingOrders::new());
+    let candle_store = Arc::new(CandleStore::new());
     let mut tasks = vec![];
 
-    initialize_pangea_indexer(&mut tasks, Arc::clone(&order_book), Arc::clone(&matching_orders)).await?;
+    initialize_pangea_indexer(&mut tasks, Arc::clone(&candle_store)).await?;
 
     let port = ev("SERVER_PORT")?.parse()?;
-    let rocket_task = tokio::spawn(run_rocket_server(port, Arc::clone(&order_book)));
+    let rocket_task = tokio::spawn(run_rocket_server(port, Arc::clone(&order_book),
+        Arc::clone(&candle_store)
+    ));
     tasks.push(rocket_task);
 
     let ctrl_c_task = tokio::spawn(async {
@@ -46,7 +48,9 @@ async fn main() -> Result<(), Error> {
     Ok(())
 }
 
-async fn run_rocket_server(port: u16, order_book: Arc<OrderBook>) {
-    let rocket = rocket(port, order_book);
+async fn run_rocket_server(port: u16, order_book: Arc<OrderBook>,
+    candle_store: Arc<CandleStore>
+) {
+    let rocket = rocket(port, order_book, candle_store);
     let _ = rocket.launch().await;
 }

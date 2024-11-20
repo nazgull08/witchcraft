@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced TradingView Integration</title>
+    <script src="https://s3.tradingview.com/tv.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        #chart-container {
+            height: 90vh;
+            width: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div id="chart-container"></div>
+
+    <script>
+        const asset = "DEFAULT_ASSET"; // Фиксированный символ
+        const interval = 3600; // Интервал в секундах (1 день)
+        const fromTimestamp = 1730542400; // Начальный timestamp
+        const toTimestamp = 1732973800; // Конечный timestamp
+
+        // Функция для получения свечных данных с бэкенда
+        async function fetchCandles() {
+            try {
+                const response = await fetch(
+                    `http://localhost:19099/candles?symbol=${asset}&interval=${interval}&from=${fromTimestamp}&to=${toTimestamp}`
+                );
+                const data = await response.json();
+
+                if (data.s === "ok") {
+                    console.log("Candle Data:", data);
+
+                    // Передаем данные в TradingView
+                    initializeTradingViewChart(data);
+                } else {
+                    console.warn("No candle data available.");
+                    alert("Failed to load candle data.");
+                }
+            } catch (error) {
+                console.error("Error fetching candle data:", error);
+                alert("Failed to load candle data.");
+            }
+        }
+
+        // Функция для инициализации TradingView Advanced Chart
+        function initializeTradingViewChart(candleData) {
+            const widget = new TradingView.widget({
+                container_id: "chart-container",
+                width: "100%",
+                height: "100%",
+                symbol: "BTC/USD", // Внешний символ (можно адаптировать)
+                interval: "D", // Daily
+                timezone: "Etc/UTC",
+                theme: "Dark",
+                style: "1", // Свечной график
+                locale: "en",
+                enable_publishing: false,
+                hide_side_toolbar: false,
+                save_image: false,
+                studies: [],
+                disabled_features: ["use_localstorage_for_settings"],
+                enabled_features: ["move_logo_to_main_pane"]
+            });
+
+            widget.onChartReady(() => {
+                console.log("TradingView chart initialized.");
+
+                const chart = widget.activeChart();
+                const timestamps = candleData.t.map(ts => ts * 1000); // Преобразуем в миллисекунды для JS
+                const prices = candleData.o.map((open, index) => ({
+                    time: timestamps[index],
+                    open,
+                    high: candleData.h[index],
+                    low: candleData.l[index],
+                    close: candleData.c[index],
+                    volume: candleData.v[index]
+                }));
+
+                // Устанавливаем данные на график
+                chart.setSymbol("BTC/USD", () => {
+                    chart.createStudy("Candles", false, false, [
+                        { data: prices }
+                    ]);
+                });
+            });
+        }
+
+        // Вызываем fetchCandles при загрузке страницы
+        document.addEventListener("DOMContentLoaded", () => {
+            fetchCandles();
+        });
+    </script>
+</body>
+</html>

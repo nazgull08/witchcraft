@@ -16,16 +16,14 @@ use crate::config::env::ev;
 use crate::error::Error;
 use crate::indexer::order_event_handler::handle_order_event;
 use crate::indexer::order_event_handler::PangeaOrderEvent;
-use crate::storage::matching_orders::MatchingOrders;
-use crate::storage::order_book::OrderBook;
+use crate::storage::candles::CandleStore;
 
 pub async fn initialize_pangea_indexer(
     tasks: &mut Vec<tokio::task::JoinHandle<()>>,
-    order_book: Arc<OrderBook>,
-    matching_orders: Arc<MatchingOrders>,
+    candle_store: Arc<CandleStore>,
 ) -> Result<(), Error> {
     let ws_task_pangea = tokio::spawn(async move {
-        if let Err(e) = start_pangea_indexer(order_book, matching_orders).await {
+        if let Err(e) = start_pangea_indexer(candle_store).await {
             eprintln!("Pangea error: {}", e);
         }
     });
@@ -34,14 +32,14 @@ pub async fn initialize_pangea_indexer(
     Ok(())
 }
 
-async fn start_pangea_indexer(order_book: Arc<OrderBook>, matching_orders: Arc<MatchingOrders>) -> Result<(), Error> {
+async fn start_pangea_indexer(candle_store: Arc<CandleStore>) -> Result<(), Error> {
     let client = create_pangea_client().await?;
 
     let contract_start_block: i64 = ev("CONTRACT_START_BLOCK")?.parse()?;
     let contract_h256 = H256::from_str(&ev("CONTRACT_ID")?)?;
 
     let mut last_processed_block =
-        fetch_historical_data(&client, &order_book, &matching_orders,
+        fetch_historical_data(&client, &candle_store, 
         contract_start_block, contract_h256).await?;
 
     if last_processed_block == 0 {
@@ -50,7 +48,7 @@ async fn start_pangea_indexer(order_book: Arc<OrderBook>, matching_orders: Arc<M
 
     info!("Switching to listening for new orders (deltas)");
 
-    listen_for_new_deltas(&client, &order_book, &matching_orders,
+    listen_for_new_deltas(&client, &candle_store,
         last_processed_block, contract_h256).await
 }
 
@@ -82,8 +80,7 @@ async fn get_latest_block(chain_id: ChainId) -> Result<i64, Error> {
 
 async fn fetch_historical_data(
     client: &Client<WsProvider>,
-    order_book: &Arc<OrderBook>,
-    matching_orders: &Arc<MatchingOrders>,
+    candle_store: &Arc<CandleStore>,
     contract_start_block: i64,
     contract_h256: H256,
 ) -> Result<i64, Error> {
@@ -120,7 +117,7 @@ async fn fetch_historical_data(
                 Ok(data) => {
                     let data = String::from_utf8(data)?;
                     let order: PangeaOrderEvent = serde_json::from_str(&data)?;
-                    handle_order_event(order_book.clone(), matching_orders.clone(),
+                    handle_order_event(candle_store.clone(), 
                         order).await;
                 }
                 Err(e) => {
@@ -136,15 +133,13 @@ async fn fetch_historical_data(
             last_processed_block
         );
     }
-
     Ok(last_processed_block)
 }
 
 
 async fn listen_for_new_deltas(
     client: &Client<WsProvider>,
-    order_book: &Arc<OrderBook>,
-    matching_orders: &Arc<MatchingOrders>,
+    candle_store: &Arc<CandleStore>,
     mut last_processed_block: i64,
     contract_h256: H256,
 ) -> Result<(), Error> {
@@ -193,7 +188,7 @@ async fn listen_for_new_deltas(
                         while let Some(data_result) = stream_deltas.next().await {
                             match data_result {
                                 Ok(data) => {
-                                    if let Err(e) = process_order_data(&data, order_book, matching_orders, &mut last_processed_block).await {
+                                    if let Err(e) = process_order_data(&data, candle_store, &mut last_processed_block).await {
                                         error!("Failed to process order data: {}", e);
                                     }
                                 }
@@ -225,15 +220,13 @@ async fn listen_for_new_deltas(
 
 async fn process_order_data(
     data: &[u8],
-    order_book: &Arc<OrderBook>,
-    matching_orders: &Arc<MatchingOrders>,
+    candle_store: &Arc<CandleStore>,
     last_processed_block: &mut i64,
 ) -> Result<(), Error> {
     let data_str = String::from_utf8(data.to_vec())?;
     let order_event: PangeaOrderEvent = serde_json::from_str(&data_str)?;
     *last_processed_block = order_event.block_number;
-    handle_order_event(order_book.clone(),
-        matching_orders.clone(),
+    handle_order_event(candle_store.clone(),
         order_event).await;
     Ok(())
 }

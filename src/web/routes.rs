@@ -4,7 +4,7 @@ use std::sync::Arc;
 use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
 use async_graphql::{EmptyMutation, EmptySubscription, Schema};
 use async_graphql_rocket::{GraphQLRequest, GraphQLResponse};
-use log::warn;
+use log::{info, warn};
 use rocket::request::FromParam;
 use rocket::response::content;
 use rocket::serde::json::Json;
@@ -14,6 +14,7 @@ use rocket_okapi::{openapi, openapi_get_routes, JsonSchema};
 use serde::{Deserialize, Serialize};
 
 use crate::indexer::spot_order::{OrderType, SpotOrder};
+use crate::storage::candles::CandleStore;
 use crate::storage::order_book::OrderBook;
 
 use super::graphql::Query;
@@ -57,63 +58,165 @@ impl<'r> FromParam<'r> for Indexer {
     }
 }
 
+#[derive(serde::Serialize, JsonSchema)]
+pub struct AdvancedChartResponse {
+    s: String,            // Статус ("ok" или "no_data")
+    t: Vec<u64>,          // Временные метки
+    o: Vec<f64>,          // Открытие
+    h: Vec<f64>,          // Максимум
+    l: Vec<f64>,          // Минимум
+    c: Vec<f64>,          // Закрытие
+    v: Vec<f64>,          // Объём
+}
+
+#[openapi]
+#[get("/timestamps")]
+fn get_timestamps(candle_store: &State<Arc<CandleStore>>) -> Json<Option<(i64, i64)>> {
+    let min_max = candle_store.get_min_max_timestamps();
+    Json(min_max)
+}
+
+
+
+#[openapi]
+#[get("/config")]
+fn get_config() -> Json<HashMap<&'static str, &'static str>> {
+    let mut config = HashMap::new();
+    config.insert("chartsStorageUrl", "https://saveload.tradingview.com");
+    config.insert("chartsStorageApiVersion", "1.1");
+    config.insert("clientId", "tradingview.com");
+    config.insert("userId", "public_user_id");
+    Json(config)
+}
+
+
+#[openapi]
+#[get("/time")]
+fn get_time() -> Json<u64> {
+    let timestamp = chrono::Utc::now().timestamp() as u64;
+    Json(timestamp)
+}
+
 #[derive(Serialize, JsonSchema)]
-pub struct SpreadResponse {
-    pub buy: Option<u128>,
-    pub sell: Option<u128>,
-    pub spread: Option<i128>,
+pub struct SymbolInfo {
+    pub symbol: String,
+    pub name: String,
+    pub description: String,
+    pub type_: String,
+    pub exchange: String,
+    pub timezone: String,
 }
 
 #[openapi]
-#[get("/orders/buy")]
-pub fn get_buy_orders(order_book: &State<Arc<OrderBook>>) -> Json<OrdersResponse> {
-    let buy_orders = order_book.get_orders_in_range(0, u128::MAX, OrderType::Buy);
-    Json(OrdersResponse { orders: buy_orders })
+#[get("/symbols")]
+fn get_symbols() -> Json<Vec<SymbolInfo>> {
+    let symbols = vec![
+        SymbolInfo {
+            symbol: "BTC/USD".to_string(),
+            name: "Bitcoin / US Dollar".to_string(),
+            description: "BTC to USD".to_string(),
+            type_: "crypto".to_string(),
+            exchange: "CryptoExchange".to_string(),
+            timezone: "Etc/UTC".to_string(),
+        },
+        SymbolInfo {
+            symbol: "ETH/USD".to_string(),
+            name: "Ethereum / US Dollar".to_string(),
+            description: "ETH to USD".to_string(),
+            type_: "crypto".to_string(),
+            exchange: "CryptoExchange".to_string(),
+            timezone: "Etc/UTC".to_string(),
+        },
+    ];
+    Json(symbols)
 }
 
 #[openapi]
-#[get("/orders/sell")]
-pub fn get_sell_orders(order_book: &State<Arc<OrderBook>>) -> Json<OrdersResponse> {
-    let sell_orders = order_book.get_orders_in_range(0, u128::MAX, OrderType::Sell);
-    Json(OrdersResponse {
-        orders: sell_orders,
-    })
-}
-
-#[openapi]
-#[get("/spread")]
-pub fn get_indexer_spread(order_book: &State<Arc<OrderBook>>) -> Json<SpreadResponse> {
-    let buy_orders = order_book.get_orders_in_range(0, u128::MAX, OrderType::Buy);
-    let sell_orders = order_book.get_orders_in_range(0, u128::MAX, OrderType::Sell);
-
-    let max_buy_price = buy_orders.iter().map(|o| o.price).max();
-    let min_sell_price = sell_orders.iter().map(|o| o.price).min();
-
-    let spread = if let (Some(max_buy), Some(min_sell)) = (max_buy_price, min_sell_price) {
-        Some(min_sell as i128 - max_buy as i128)
+#[get("/history?<symbol>&<resolution>&<from>&<to>")]
+fn get_history(
+    candle_store: &State<Arc<CandleStore>>,
+    symbol: String,
+    resolution: u64,
+    from: u64,
+    to: u64,
+) -> Json<AdvancedChartResponse> {
+    let candles = candle_store.get_candles_in_time_range(&symbol, resolution, from, to);
+    if candles.is_empty() {
+        Json(AdvancedChartResponse {
+            s: "no_data".to_string(),
+            t: vec![],
+            o: vec![],
+            h: vec![],
+            l: vec![],
+            c: vec![],
+            v: vec![],
+        })
     } else {
-        None
-    };
+        let t: Vec<u64> = candles.iter().map(|c| c.timestamp.timestamp() as u64).collect();
+        let o: Vec<f64> = candles.iter().map(|c| c.open).collect();
+        let h: Vec<f64> = candles.iter().map(|c| c.high).collect();
+        let l: Vec<f64> = candles.iter().map(|c| c.low).collect();
+        let c: Vec<f64> = candles.iter().map(|c| c.close).collect();
+        let v: Vec<f64> = candles.iter().map(|c| c.volume).collect();
 
-    Json(SpreadResponse {
-        buy: max_buy_price,
-        sell: min_sell_price,
-        spread,
-    })
+        Json(AdvancedChartResponse {
+            s: "ok".to_string(),
+            t,
+            o,
+            h,
+            l,
+            c,
+            v,
+        })
+    }
 }
+
 
 #[openapi]
-#[get("/orders/count")]
-pub fn get_orders_count(order_book: &State<Arc<OrderBook>>) -> Json<HashMap<String, usize>> {
-    let buy_orders = order_book.get_orders_in_range(0, u128::MAX, OrderType::Buy);
-    let sell_orders = order_book.get_orders_in_range(0, u128::MAX, OrderType::Sell);
+#[get("/candles?<symbol>&<interval>&<from>&<to>")]
+pub fn get_candles(
+    candle_store: &State<Arc<CandleStore>>,
+    symbol: String,
+    interval: u64,
+    from: u64,
+    to: u64,
+) -> Json<AdvancedChartResponse> {
+    let candles = candle_store
+        .get_candles_in_time_range(&symbol, interval, from, to);
+    //info!("=====================");
+    //info!("candle_store: {:?}", candle_store);
+    //info!("=====================");
 
-    let mut counts = HashMap::new();
-    counts.insert("buy_orders".to_string(), buy_orders.len());
-    counts.insert("sell_orders".to_string(), sell_orders.len());
+    if candles.is_empty() {
+        Json(AdvancedChartResponse {
+            s: "no_data".to_string(),
+            t: vec![],
+            o: vec![],
+            h: vec![],
+            l: vec![],
+            c: vec![],
+            v: vec![],
+        })
+    } else {
+        let t: Vec<u64> = candles.iter().map(|c| c.timestamp.timestamp() as u64).collect();
+        let o: Vec<f64> = candles.iter().map(|c| c.open).collect();
+        let h: Vec<f64> = candles.iter().map(|c| c.high).collect();
+        let l: Vec<f64> = candles.iter().map(|c| c.low).collect();
+        let c: Vec<f64> = candles.iter().map(|c| c.close).collect();
+        let v: Vec<f64> = candles.iter().map(|c| c.volume).collect();
 
-    Json(counts)
+        Json(AdvancedChartResponse {
+            s: "ok".to_string(),
+            t,
+            o,
+            h,
+            l,
+            c,
+            v,
+        })
+    }
 }
+
 
 #[rocket::post("/graphql", data = "<request>")]
 pub async fn graphql_handler(
@@ -133,10 +236,12 @@ pub fn graphql_playground() -> content::RawHtml<String> {
 
 pub fn get_routes() -> Vec<Route> {
     openapi_get_routes![
-        get_buy_orders,
-        get_sell_orders,
-        get_indexer_spread,
-        get_orders_count,
+        get_config,
+        get_time,
+        get_symbols,
+        get_candles,
+        get_timestamps,
+        get_history
     ]
 }
 
