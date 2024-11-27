@@ -33,7 +33,7 @@ pub async fn handle_order_event(
         match event_type {
             "Trade" => {
                 if let (Some(price), Some(amount)) = (event.price, event.amount) {
-                    let asset = "ETH-USDC"; // Фиксированный символ
+                    let asset = "AAPL"; // Фиксированный символ
                     let genesis_block = 0; // Блок, соответствующий `genesis_timestamp`
                     let genesis_timestamp = 1724996333; // Unix timestamp первого блока
 
