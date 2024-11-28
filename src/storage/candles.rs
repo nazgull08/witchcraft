@@ -111,7 +111,44 @@ impl CandleStore {
         vec![]
     }
 
-    pub fn get_candles_in_time_range(
+    pub fn get_candles_in_time_range_mils(
+        &self,
+        symbol: &str,
+        interval: u64,
+        from: u64,
+        to: u64,
+    ) -> Vec<Candle> {
+        let candles = self.candles.read().unwrap();
+        if let Some(interval_candles) = candles
+            .get(symbol)
+            .and_then(|interval_map| interval_map.get(&interval))
+        {
+            let filtered: Vec<Candle> = interval_candles
+                .iter()
+                .filter(|c| {
+                    let timestamp = c.timestamp.timestamp() as u64;
+                    let result = timestamp >= from && timestamp <= to;
+                    info!(
+                        "Filtering candle: {:?}, timestamp: {}, result: {}",
+                        c, timestamp, result
+                    );
+                    result
+                })
+                .cloned()
+                .collect();
+
+            info!("Filtered candles: {:?}", filtered);
+            filtered
+        } else {
+            info!(
+                "No candles found for symbol: {}, interval: {}, from: {}, to: {}",
+                symbol, interval, from, to
+            );
+            vec![]
+        }
+    }
+
+    pub fn get_candles_in_time_range_secs(
         &self,
         symbol: &str,
         interval: u64,
